@@ -1,0 +1,6 @@
+openai
+requests
+praw
+python-dotenv
+Flask
+yfinance
