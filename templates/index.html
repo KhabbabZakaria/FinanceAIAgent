@@ -3,25 +3,156 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Finance AI Assistant</title>
+    <title>Fina – Your AI Finance Assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
     <style>
-        body { font-family: Arial; padding: 40px; background: #f2f2f2; }
-        textarea, input[type="text"], button {
-            width: 100%; padding: 10px; margin-top: 10px;
+        :root {
+            --primary: #00d084; /* neon green */
+            --background: #0e1117;
+            --card-bg: #161b22;
+            --text-light: #8b949e;
+            --text-dark: #c9d1d9;
+            --radius: 12px;
         }
-        .container { background: white; padding: 20px; border-radius: 8px; max-width: 700px; margin: auto; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--background);
+            margin: 0;
+            padding: 0;
+            color: var(--text-dark);
+        }
+
+        header {
+            text-align: center;
+            padding: 2rem 1rem;
+            background: var(--card-bg);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 2rem;
+            color: var(--primary);
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        header p {
+            margin-top: 0.5rem;
+            color: var(--text-light);
+            font-size: 1rem;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: var(--card-bg);
+            border-radius: var(--radius);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        }
+
+        label {
+            font-weight: 600;
+            color: var(--text-dark);
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 1rem;
+            border-radius: var(--radius);
+            border: 1px solid #30363d;
+            background: #0d1117;
+            color: var(--text-dark);
+            resize: none;
+            font-size: 1rem;
+            line-height: 1.5;
+            transition: all 0.2s ease;
+        }
+
+        textarea:focus {
+            border-color: var(--primary);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 208, 132, 0.3);
+        }
+
+        button {
+            margin-top: 1rem;
+            background: var(--primary);
+            color: #0e1117;
+            padding: 0.8rem 1.5rem;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #00b874;
+        }
+
+        .answer-section {
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: var(--radius);
+        }
+
+        .answer-section h3 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: var(--primary);
+        }
+
+        .answer-section pre {
+            white-space: pre-wrap;
+            font-size: 0.95rem;
+            color: var(--text-dark);
+        }
+
+        @media (max-width: 600px) {
+            header h1 {
+                font-size: 1.5rem;
+            }
+            .container {
+                margin: 1rem;
+                padding: 1.5rem;
+            }
+        }
     </style>
 </head>
 <body>
+
+    <header>
+        <h1>Fina</h1>
+        <p>Your AI-powered finance market assistant</p>
+    </header>
+
     <div class="container">
-        <h1>Finance AI Assistant</h1>
         <form method="post">
-            <label for="question">Ask your question about finance markets, stocks, etc:</label><br>
-            <textarea id="question" name="question" rows="3">{{ question }}</textarea><br>
+            <label for="question">Ask Fina about markets, stocks, or portfolio analysis:</label>
+            <textarea id="question" name="question" rows="3" placeholder="e.g., Rank my portfolio: AAPL 50%, TSLA 30%, MSFT 20%">{{ question }}</textarea>
             <button type="submit">Get Answer</button>
         </form>
-        <h3>Answer:</h3>
-        <div style="white-space: pre-wrap;">{{ answer }}</div>
+
+        {% if answer %}
+        <div class="answer-section">
+            <h3>Answer:</h3>
+            <pre>{{ answer }}</pre>
+        </div>
+        {% endif %}
     </div>
+
 </body>
 </html>
