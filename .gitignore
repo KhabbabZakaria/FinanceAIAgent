@@ -1,3 +1,5 @@
 .env
 test.txt
 test.py
+portfolios.db
+__pycache__
