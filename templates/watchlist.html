@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Watchlist – Fina</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #00d084; /* neon green */
+            --background: #0e1117;
+            --card-bg: #161b22;
+            --text-light: #8b949e;
+            --text-dark: #c9d1d9;
+            --radius: 12px;
+            --danger: #f85149;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--background);
+            margin: 0;
+            padding: 0;
+            color: var(--text-dark);
+        }
+
+        header {
+            text-align: center;
+            padding: 2rem 1rem;
+            background: var(--card-bg);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 2rem;
+            color: var(--primary);
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        header p {
+            margin-top: 0.5rem;
+            color: var(--text-light);
+            font-size: 1rem;
+        }
+
+        nav {
+            text-align: center;
+            padding: 1rem;
+        }
+
+        nav a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+            margin: 0 1rem;
+            transition: color 0.2s;
+        }
+
+        nav a:hover {
+            color: #00b874;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: var(--card-bg);
+            border-radius: var(--radius);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        }
+
+        .section {
+            margin-bottom: 2rem;
+        }
+
+        .section h2 {
+            color: var(--primary);
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        label {
+            font-weight: 600;
+            color: var(--text-dark);
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        input {
+            width: 100%;
+            padding: 0.8rem;
+            border-radius: var(--radius);
+            border: 1px solid #30363d;
+            background: #0d1117;
+            color: var(--text-dark);
+            font-size: 1rem;
+            transition: all 0.2s ease;
+            box-sizing: border-box;
+        }
+
+        input:focus {
+            border-color: var(--primary);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 208, 132, 0.3);
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        button {
+            background: var(--primary);
+            color: #0e1117;
+            padding: 0.8rem 1.5rem;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: 100%;
+        }
+
+        button:hover {
+            background: #00b874;
+        }
+
+        .watchlist-items {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .watchlist-item {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: var(--radius);
+            padding: 1rem;
+            margin-bottom: 0.8rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .watchlist-item .info {
+            flex: 1;
+        }
+
+        .watchlist-item .ticker {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .watchlist-item .weight {
+            color: var(--text-light);
+            font-size: 0.9rem;
+            margin-top: 0.3rem;
+        }
+
+        .watchlist-item .threshold {
+            color: var(--text-light);
+            font-size: 0.9rem;
+        }
+
+        .remove-btn {
+            background: var(--danger);
+            color: white;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: auto;
+        }
+
+        .remove-btn:hover {
+            background: #da3633;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-light);
+        }
+
+        .message {
+            padding: 1rem;
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }
+
+        .message.success {
+            background: rgba(0, 208, 132, 0.15);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+        }
+
+        .message.error {
+            background: rgba(248, 81, 73, 0.15);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+        }
+
+        @media (max-width: 600px) {
+            header h1 {
+                font-size: 1.5rem;
+            }
+            .container {
+                margin: 1rem;
+                padding: 1.5rem;
+            }
+            .form-row {
+                flex-direction: column;
+                gap: 0;
+            }
+            .watchlist-item {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .remove-btn {
+                margin-top: 0.5rem;
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Fina Watchlist</h1>
+        <p>Manage your monitored portfolio</p>
+    </header>
+
+    <nav>
+        <a href="/">← Back to Chat</a>
+    </nav>
+
+    <div class="container">
+        {% if message %}
+        <div class="message {{ message_type }}">
+            {{ message }}
+        </div>
+        {% endif %}
+
+        <!-- Add New Ticker Section -->
+        <div class="section">
+            <h2>Add Ticker to Watchlist</h2>
+            <form method="post" action="/add_to_watchlist">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ticker">Ticker Symbol</label>
+                        <input type="text" id="ticker" name="ticker" placeholder="AAPL" required style="text-transform: uppercase;">
+                    </div>
+                    <div class="form-group">
+                        <label for="weight">Portfolio Weight (%)</label>
+                        <input type="number" id="weight" name="weight" placeholder="25" min="0" max="100" step="0.1" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="alert_threshold">Alert Threshold (% drop)</label>
+                    <input type="number" id="alert_threshold" name="alert_threshold" placeholder="5.0" value="5.0" min="0.1" step="0.1">
+                </div>
+                <button type="submit">Add to Watchlist</button>
+            </form>
+        </div>
+
+        <!-- Current Watchlist Section -->
+        <div class="section">
+            <h2>Your Watchlist</h2>
+            {% if watchlist %}
+            <ul class="watchlist-items">
+                {% for item in watchlist %}
+                <li class="watchlist-item">
+                    <div class="info">
+                        <div class="ticker">{{ item.ticker }}</div>
+                        <div class="weight">Weight: {{ "%.1f"|format(item.weight * 100) }}%</div>
+                        <div class="threshold">Alert at {{ "%.1f"|format(item.alert_threshold) }}% drop</div>
+                    </div>
+                    <form method="post" action="/remove_from_watchlist" style="margin: 0;">
+                        <input type="hidden" name="ticker" value="{{ item.ticker }}">
+                        <button type="submit" class="remove-btn">Remove</button>
+                    </form>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <div class="empty-state">
+                <p>No tickers in your watchlist yet.</p>
+                <p>Add some tickers above to start monitoring!</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+</body>
+</html>
