@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 import re
 import json
 
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 
 

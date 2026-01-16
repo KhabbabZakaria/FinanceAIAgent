@@ -5,6 +5,7 @@ python-dotenv
 Flask
 yfinance
 APScheduler==3.10.4
-yagmail  # for easy email sending
+yagmail
 scipy
 langchain
+langchain-openai
