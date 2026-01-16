@@ -101,7 +101,7 @@ class QuestionClassifier:
             HumanMessage(content=question)
         ]
 
-        resp = self.chat(messages)
+        resp = self.chat.invoke(messages)
         text = resp if isinstance(resp, str) else getattr(resp, "content", str(resp))
         json_text = self._try_extract_json(text)
 
