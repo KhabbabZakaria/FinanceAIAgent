@@ -9,3 +9,4 @@ yagmail
 scipy
 langchain
 langchain-openai
+langchain-core
