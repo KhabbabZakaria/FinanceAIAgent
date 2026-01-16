@@ -183,4 +183,5 @@ def remove_from_watchlist():
 # monitor.start()
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Use debug=False for production deployment
+    app.run(debug=False, host='0.0.0.0', port=5000)
