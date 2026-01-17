@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 # Initialize database
 def init_db():
-    conn = sqlite3.connect('portfolios.db')
+    conn = sqlite3.connect('portfolios.db', timeout=30)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS portfolios
                  (user_id TEXT, ticker TEXT, weight REAL, 
@@ -85,7 +85,7 @@ def index():
 @app.route('/watchlist', methods=['GET'])
 def watchlist():
     """Display the watchlist page"""
-    conn = sqlite3.connect('portfolios.db')
+    conn = sqlite3.connect('portfolios.db', timeout=30)
     c = conn.cursor()
     c.execute('SELECT ticker, weight, alert_threshold FROM portfolios WHERE user_id=?', ('default_user',))
     items = c.fetchall()
@@ -111,7 +111,7 @@ def add_to_watchlist():
         return redirect(url_for('watchlist'))
     
     try:
-        conn = sqlite3.connect('portfolios.db')
+        conn = sqlite3.connect('portfolios.db', timeout=30)
         c = conn.cursor()
         c.execute('INSERT OR REPLACE INTO portfolios VALUES (?, ?, ?, ?)',
                   (user_id, ticker, weight, alert_threshold))
@@ -119,7 +119,7 @@ def add_to_watchlist():
         conn.close()
         
         # Get updated watchlist
-        conn = sqlite3.connect('portfolios.db')
+        conn = sqlite3.connect('portfolios.db', timeout=30)
         c = conn.cursor()
         c.execute('SELECT ticker, weight, alert_threshold FROM portfolios WHERE user_id=?', (user_id,))
         items = c.fetchall()
@@ -148,14 +148,14 @@ def remove_from_watchlist():
     ticker = request.form.get('ticker', '').strip().upper()
     
     try:
-        conn = sqlite3.connect('portfolios.db')
+        conn = sqlite3.connect('portfolios.db', timeout=30)
         c = conn.cursor()
         c.execute('DELETE FROM portfolios WHERE user_id=? AND ticker=?', (user_id, ticker))
         conn.commit()
         conn.close()
         
         # Get updated watchlist
-        conn = sqlite3.connect('portfolios.db')
+        conn = sqlite3.connect('portfolios.db', timeout=30)
         c = conn.cursor()
         c.execute('SELECT ticker, weight, alert_threshold FROM portfolios WHERE user_id=?', (user_id,))
         items = c.fetchall()
@@ -184,4 +184,5 @@ def remove_from_watchlist():
 
 if __name__ == '__main__':
     # Use debug=False for production deployment
+    #app.run(debug=True, port=5002)
     app.run(debug=False, host='0.0.0.0', port=5000)
