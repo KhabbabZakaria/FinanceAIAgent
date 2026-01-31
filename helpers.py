@@ -231,7 +231,7 @@ def get_stock_trend(symbol):
     last_week = today - timedelta(days=7)
     
     # Download historical data for last 8 days to cover weekends/holidays
-    data = yf.download(symbol, start=last_week - timedelta(days=2), end=today + timedelta(days=1))
+    data = yf.download(symbol, start=last_week - timedelta(days=2), end=today + timedelta(days=1), progress=False, threads=False)
     
     if data.empty:
         return f"No data found for {symbol}"
@@ -380,7 +380,7 @@ def analyze_portfolio(tickers: list, weights: list) -> str:
     weights_series = pd.Series(weights, index=tickers)
 
     # Download historical data
-    data = yf.download(tickers, start=start_date, end=end_date)['Close']
+    data = yf.download(tickers, start=start_date, end=end_date, progress=False, threads=False)['Close']
     data = data.dropna()
 
     # Calculate daily returns
@@ -440,7 +440,7 @@ def should_buy_stock(tickers: list, weights: list, new_stock: str) -> str:
 
     # Fetch data for current portfolio and new stock
     all_tickers = tickers + [new_stock]
-    data = yf.download(all_tickers, start=start_date, end=end_date)['Close'].dropna()
+    data = yf.download(all_tickers, start=start_date, end=end_date, progress=False, threads=False)['Close'].dropna()
 
     if data.empty:
         return f"No historical data available for one or more tickers: {all_tickers}"

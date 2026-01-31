@@ -1,9 +1,17 @@
 from flask import Flask, render_template, request, redirect, url_for
 from helpers import *
 import sqlite3
+import logging
 
 # Flask app
 app = Flask(__name__)
+
+logger = logging.getLogger("financeai")
+if not logger.handlers:
+    handler = logging.FileHandler("app-error.log")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 # Initialize database
 def init_db():
@@ -73,6 +81,7 @@ def index():
                 answer = ask_openai(question, context)
 
         except Exception as e:
+            logger.exception("Error processing question")
             answer = f"Error processing your question: {str(e)}"
         
         return render_template('index.html', answer=answer, question=question)
