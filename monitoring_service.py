@@ -206,9 +206,10 @@ class StockMonitor:
         try:
             yag = yagmail.SMTP(ALERT_EMAIL, ALERT_EMAIL_PASSWORD)
             yag.send(to=to_email, subject=subject, contents=body)
-            print(f"✅ Alert sent: {subject}")
+            #print(f"✅ Alert sent: {subject}")
         except Exception as e:
-            print(f"❌ Email failed: {e}")
+            pass
+            #print(f"❌ Email failed: {e}")
     
     def start(self):
         """Start all monitoring jobs"""
@@ -226,4 +227,4 @@ class StockMonitor:
                               day_of_week='mon', hour=9)
         
         self.scheduler.start()
-        print("🤖 Monitoring service started!")
+        #print("🤖 Monitoring service started!")

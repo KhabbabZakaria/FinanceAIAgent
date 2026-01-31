@@ -34,13 +34,13 @@ def index():
         classifier = QuestionClassifier()
         classification = classifier.classify(question)
 
-        print('classification')
-        print(classification)
+        # print('classification')
+        # print(classification)
 
         try:
             if classification['intent'] == 'rank_portfolio':
                 tickerList, weightList = classification['tickers'], classification['weights']
-                print(tickerList, weightList)
+                #print(tickerList, weightList)
                 answer=analyze_portfolio(tickerList, weightList)
 
             elif classification['intent'] == 'should_buy_stock':
