@@ -1,0 +1,8 @@
+{
+  "intent_accuracy": 0.9642857142857143,
+  "slot_accuracy": 0.9642857142857143,
+  "hard_failures": 0,
+  "n_graded": 56,
+  "p50_ms": 3800,
+  "_recorded": "qwen2.5:3b via ollama, 60-case golden set, 56 graded, after the slot-repair guards"
+}

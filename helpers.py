@@ -1,5 +1,4 @@
 from config import *
-from openai import OpenAI
 import requests
 import praw
 from datetime import datetime, timedelta
@@ -8,21 +7,99 @@ import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
 from typing import Dict, Any, List
+import logging
 import re
 import json
 
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from llm import chat
+from sources import DEFAULT_TIMEOUT, SourceError
+
+logger = logging.getLogger("financeai.helpers")
 
 
 
 
+
+
+CLASSIFIER_SYSTEM_PROMPT = """You are a classification assistant for a finance app.
+Output ONLY valid JSON (no explanations or extra text).
+
+Schema:
+{
+"intent": "<one of: rank_portfolio, top_performers, stock_trend, get_finance_news, should_buy_stock, other>",
+"tickers": [<the stocks the user ALREADY HOLDS, as ticker symbols>],
+"weights": [<numbers; if user gave percents convert to decimals; else empty list>],
+"new_stock": "<the stock the user is CONSIDERING BUYING, or null>",
+"type": "<large|mid|small|all>",
+"count": <integer, default 3>,
+"symbol": "<single ticker the user is asking about, or null>",
+"news_topic": "<short topic for news or 'general'>"
+}
+
+Two distinctions decide most questions:
+
+1. "tickers" is what the user ALREADY OWNS. "new_stock" is what they are
+   THINKING OF BUYING. A stock being considered never goes in "tickers",
+   whatever its symbol is. If no holdings are named, "tickers" is empty.
+
+2. Asking about the risk, volatility, return or quality of holdings they
+   already have is rank_portfolio. It is only should_buy_stock when the user
+   names a specific stock they do not yet own and asks whether to add it.
+
+Examples:
+
+Q: Rank my portfolio: IVV 50%, KO 30%, BND 20%
+A: {"intent":"rank_portfolio","tickers":["IVV","KO","BND"],"weights":[0.5,0.3,0.2],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"general"}
+
+Q: rank my portfolio: VOO 60%, GLD 25%, ETH-USD 15%
+A: {"intent":"rank_portfolio","tickers":["VOO","GLD","ETH-USD"],"weights":[0.6,0.25,0.15],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"general"}
+
+Q: how risky is UNP 70%, PEP 30%?
+A: {"intent":"rank_portfolio","tickers":["UNP","PEP"],"weights":[0.7,0.3],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"general"}
+
+Q: Should I buy NVDA? My portfolio is SPY 40%, IWM 30%, PLTR 20%, XOM 10%
+A: {"intent":"should_buy_stock","tickers":["SPY","IWM","PLTR","XOM"],"weights":[0.4,0.3,0.2,0.1],"new_stock":"NVDA","type":"all","count":3,"symbol":null,"news_topic":"general"}
+
+Q: should I buy COST? I hold VTI 60%, JNJ 40%
+A: {"intent":"should_buy_stock","tickers":["VTI","JNJ"],"weights":[0.6,0.4],"new_stock":"COST","type":"all","count":3,"symbol":null,"news_topic":"general"}
+
+Q: is UNH worth buying?
+A: {"intent":"should_buy_stock","tickers":[],"weights":[],"new_stock":"UNH","type":"all","count":3,"symbol":null,"news_topic":"general"}
+
+Q: What are the top 5 large cap stocks?
+A: {"intent":"top_performers","tickers":[],"weights":[],"new_stock":null,"type":"large","count":5,"symbol":null,"news_topic":"general"}
+
+Q: What's going on with Walmart?
+A: {"intent":"stock_trend","tickers":[],"weights":[],"new_stock":null,"type":"all","count":3,"symbol":"WMT","news_topic":"general"}
+
+Q: what's going on in the energy sector?
+A: {"intent":"get_finance_news","tickers":[],"weights":[],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"energy"}
+
+Q: Tell me some crypto news
+A: {"intent":"get_finance_news","tickers":[],"weights":[],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"crypto"}
+
+Now classify the user's question."""
+
+DEFAULT_CLASSIFICATION = {
+    "intent": "other",
+    "tickers": [],
+    "weights": [],
+    "new_stock": None,
+    "type": "all",
+    "count": 3,
+    "symbol": None,
+    "news_topic": "general",
+}
 
 
 class QuestionClassifier:
-    def __init__(self, model_name: str = "gpt-4o-mini", temperature: float = 0.0):
-        """Initialize the classifier with an OpenAI chat model."""
-        self.chat = ChatOpenAI(model_name=model_name, temperature=temperature)
+    def __init__(self, temperature: float = 0.0):
+        """Classify questions via the provider chain in llm.py.
+
+        The model is chosen by LLM_PROVIDERS rather than pinned here, so the local
+        small model handles this and a hosted model takes over only if it is down.
+        """
+        self.temperature = temperature
 
     @staticmethod
     def _try_extract_json(text: str) -> str:
@@ -59,71 +136,208 @@ class QuestionClassifier:
             out = [x / s for x in out]
         return out
 
-    def classify(self, question: str) -> Dict[str, Any]:
-        system = """You are a classification assistant for a finance app.
-    Output ONLY valid JSON (no explanations or extra text).
-
-    Schema:
-    {
-    "intent": "<one of: rank_portfolio, top_performers, stock_trend, get_finance_news, should_buy_stock, other>",
-    "tickers": [<tickers, as strings, use ticker symbols if user gave names>],
-    "weights": [<numbers; if user gave percents convert to decimals; else empty list>],
-    "new_stock": "<single ticker for should_buy_stock, or null>",
-    "type": "<large|mid|small|all>",
-    "count": <integer, default 3>,
-    "symbol": "<single ticker or null>",
-    "news_topic": "<short topic for news or 'general'>"
+    # Uppercase words that look like tickers but are not. Kept short on purpose:
+    # a false positive here would invent a holding the user never mentioned.
+    _NOT_TICKERS = {
+        "I", "A", "AN", "THE", "AND", "OR", "IF", "IS", "IT", "ME", "MY", "DO",
+        "USD", "EUR", "GBP", "ETF", "IPO", "CEO", "CFO", "GDP", "CPI", "FED",
+        "USA", "UK", "EU", "AI", "ML", "IT", "OK", "PE", "EPS", "ROI", "YTD",
+        "ATH", "FAQ", "NYSE", "SEC", "IRA", "ESG", "TL", "DR",
     }
 
-    Examples:
+    @staticmethod
+    def _example_tickers() -> set:
+        """Every ticker that appears in the few-shot answers.
 
-    Q: Rank my portfolio: AAPL 50%, TSLA 30%, MSFT 20%
-    A: {"intent":"rank_portfolio","tickers":["AAPL","TSLA","MSFT"],"weights":[0.5,0.3,0.2],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"general"}
+        Derived from the prompt rather than hardcoded, so it cannot drift out
+        of sync when the examples are edited.
+        """
+        found = set()
+        for line in CLASSIFIER_SYSTEM_PROMPT.splitlines():
+            line = line.strip()
+            if not line.startswith("A: {"):
+                continue
+            try:
+                d = json.loads(line[3:])
+            except Exception:
+                continue
+            found.update(x.upper() for x in d.get("tickers") or [])
+            for key in ("new_stock", "symbol"):
+                if d.get(key):
+                    found.add(str(d[key]).upper())
+        return found
 
-    Q: Should I buy AAPL? My portfolio is IVV 40%, IWM 30%, SOL 20%, PLTR 10%
-    A: {"intent":"should_buy_stock","tickers":["IVV","IWM","SOL","PLTR"],"weights":[0.4,0.3,0.2,0.1],"new_stock":"AAPL","type":"all","count":3,"symbol":null,"news_topic":"general"}
+    @staticmethod
+    def _strip_null_tickers(parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop null/blank entries, keeping tickers and weights aligned.
 
-    Q: What are the top 5 large cap stocks?
-    A: {"intent":"top_performers","tickers":[],"weights":[],"new_stock":null,"type":"large","count":5,"symbol":null,"news_topic":"general"}
+        The model emits null inside the list occasionally. Unfiltered it used
+        to reach _normalize_ticker(None) and raise.
+        """
+        raw = parsed.get("tickers") or []
+        weights = list(parsed.get("weights") or [])
+        if not raw:
+            return parsed
+        if len(raw) == len(weights):
+            pairs = [(str(x).upper(), w) for x, w in zip(raw, weights) if x]
+            parsed["tickers"] = [x for x, _ in pairs]
+            parsed["weights"] = [w for _, w in pairs]
+        else:
+            parsed["tickers"] = [str(x).upper() for x in raw if x]
+        return parsed
 
-    Q: What's going on with Apple?
-    A: {"intent":"stock_trend","tickers":[],"weights":[],"new_stock":null,"type":"all","count":3,"symbol":"AAPL","news_topic":"general"}
+    @classmethod
+    def _drop_invented_holdings(cls, question: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove holdings the model copied out of the few-shot examples.
 
-    Q: Tell me some crypto news
-    A: {"intent":"get_finance_news","tickers":[],"weights":[],"new_stock":null,"type":"all","count":3,"symbol":null,"news_topic":"crypto"}
+        Asked "should I add PLTR to my portfolio" with no holdings named, the
+        model returns the example's portfolio verbatim (VTI 60%, JNJ 40%).
+        Analysing a portfolio the user does not own, and recommending on it, is
+        worse than admitting we do not know what they hold.
 
-    Now classify the user's question.
+        Only fires when the question states no quantity at all. "40 percent
+        Nvidia, 60 percent Coca Cola" names real holdings by company name, so
+        the symbols NVDA and KO are absent from the text and would otherwise
+        look invented. A stated quantity means stated holdings; leave them be.
+        """
+        if parsed.get("intent") not in ("rank_portfolio", "should_buy_stock"):
+            return parsed
 
-    User question: """ + question
+        raw = parsed.get("tickers") or []
+        weights = list(parsed.get("weights") or [])
+        if not raw or len(raw) != len(weights):
+            return parsed
+        tickers = [str(x).upper() for x in raw]
 
+        asked = question.upper()
+        if cls._QUANTITY.search(asked):
+            return parsed
+
+        examples = cls._example_tickers()
+        keep_t, keep_w = [], []
+        for ticker, weight in zip(tickers, weights):
+            invented = ticker in examples and not re.search(
+                rf"\b{re.escape(ticker)}\b", asked)
+            if invented:
+                logger.warning("Dropping %s: a few-shot example holding the "
+                               "question never mentions", ticker)
+                continue
+            keep_t.append(ticker)
+            keep_w.append(weight)
+
+        parsed["tickers"] = keep_t
+        parsed["weights"] = keep_w
+        return parsed
+
+    # Any sign the user quantified a holding: a percent, a written percent, or
+    # a fraction word. Its presence means they described a real portfolio.
+    _QUANTITY = re.compile(r"\d+\s*%|\d+\s*PERCENT|\bHALF\b|\bTHIRD\b|"
+                           r"\bQUARTER\b|\bEQUALLY\b|\d+\s*/\s*\d+")
+
+    # "IVV 30%" or "BTC-USD 2%" -- a ticker immediately followed by a percent.
+    _WEIGHTED = re.compile(r"\b([A-Z][A-Z.\-]{1,9})\b[\s:=]*(\d+(?:\.\d+)?)\s*%")
+
+    @classmethod
+    def _repair_dropped_holdings(cls, question: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Put back a weighted holding the model left out of `tickers`.
+
+        Dropping one is bad; the normalisation that follows is worse, because it
+        rescales whatever survived back to 100% and the loss becomes invisible.
+        The question states both the symbol and the percent, so recover them
+        rather than analysing a portfolio the user never described.
+        """
+        if parsed.get("intent") not in ("rank_portfolio", "should_buy_stock"):
+            return parsed
+
+        tickers = [t.upper() for t in parsed.get("tickers") or []]
+        weights = list(parsed.get("weights") or [])
+        if len(tickers) != len(weights):
+            return parsed                       # can't align; leave it alone
+
+        candidate = (parsed.get("new_stock") or "").upper()
+        for symbol, pct in cls._WEIGHTED.findall(question):
+            if symbol in cls._NOT_TICKERS or symbol in tickers or symbol == candidate:
+                continue
+            logger.warning("Model dropped weighted holding %s %s%%; restoring it",
+                           symbol, pct)
+            tickers.append(symbol)
+            weights.append(float(pct))
+
+        parsed["tickers"] = tickers
+        parsed["weights"] = weights
+        return parsed
+
+    @classmethod
+    def _repair_should_buy(cls, question: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Recover the candidate stock when the model leaves `new_stock` empty.
+
+        The model intermittently files the stock being *considered* under
+        `tickers`, which are supposed to be existing holdings. Both repairs are
+        deterministic and only ever run when `new_stock` is already empty, so a
+        correct classification is never overwritten.
+        """
+        if parsed.get("intent") != "should_buy_stock" or parsed.get("new_stock"):
+            return parsed
+
+        tickers = parsed.get("tickers") or []
+        held = {t.upper() for t in tickers}
+
+        # 1. A ticker-shaped word in the question that was not filed as a holding
+        #    is almost certainly the candidate.
+        mentioned = {w for w in re.findall(r"\b[A-Z][A-Z.\-]{1,5}\b", question)
+                     if w not in cls._NOT_TICKERS and w not in held}
+        if len(mentioned) == 1:
+            parsed["new_stock"] = mentioned.pop()
+            return parsed
+
+        # Several unexplained tickers ("should I buy AAPL or MSFT?") is a
+        # genuinely ambiguous question. Asking beats guessing, and in
+        # particular beats falling through to rule 2 and promoting a real
+        # holding the user did state.
+        if mentioned:
+            return parsed
+
+        # 2. Nothing else named, and a single "holding": that is the candidate
+        #    mis-filed. Nobody asks whether to buy a one-stock portfolio they
+        #    already own in full.
+        if len(tickers) == 1:
+            parsed["new_stock"] = tickers[0]
+            parsed["tickers"] = []
+            parsed["weights"] = []
+
+        return parsed
+
+    def classify(self, question: str) -> Dict[str, Any]:
+        # The question goes in the user turn only. It used to be appended to the
+        # system prompt as well, which smaller models read as two separate asks.
         messages = [
-            SystemMessage(content=system),
-            HumanMessage(content=question)
+            {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
+            {"role": "user", "content": question},
         ]
 
-        resp = self.chat.invoke(messages)
-        text = resp if isinstance(resp, str) else getattr(resp, "content", str(resp))
-        json_text = self._try_extract_json(text)
+        result = chat(messages, json_mode=True, max_tokens=300, temperature=self.temperature)
+        logger.info("Classified via %s/%s in %dms", result.provider, result.model, result.latency_ms)
 
         try:
-            parsed = json.loads(json_text)
+            parsed = json.loads(self._try_extract_json(result.text))
         except Exception:
-            parsed = {
-                "intent": "other",
-                "tickers": [],
-                "weights": [],
-                "new_stock": None,
-                "type": "all",
-                "count": 3,
-                "symbol": None,
-                "news_topic": "general"
-            }
+            logger.warning("Unparseable classification from %s: %r", result.provider, result.text[:200])
+            parsed = dict(DEFAULT_CLASSIFICATION)
+
+        parsed = self._strip_null_tickers(parsed)
+        parsed = self._drop_invented_holdings(question, parsed)
+        parsed = self._repair_dropped_holdings(question, parsed)
+        parsed = self._repair_should_buy(question, parsed)
 
         intent = parsed.get("intent", "other")
-        tickers = [self._normalize_ticker(t) for t in parsed.get("tickers") or []]
+        tickers = [self._normalize_ticker(str(t))
+                   for t in parsed.get("tickers") or [] if t]
         weights = self._normalize_weights(parsed.get("weights") or [])
         typ = (parsed.get("type") or "all").lower()
-        count = int(parsed.get("count") or 3)
+        try:
+            count = int(parsed.get("count") or 3)
+        except (TypeError, ValueError):
+            count = 3
         symbol = parsed.get("symbol") or None
         news_topic = (parsed.get("news_topic") or "general").lower()
         new_stock = parsed.get("new_stock") or None
@@ -132,44 +346,84 @@ class QuestionClassifier:
             "intent": intent,
             "tickers": tickers,
             "weights": weights,
-            "new_stock": (new_stock.strip().upper() if new_stock else None),
+            "new_stock": (str(new_stock).strip().upper() if new_stock else None),
             "type": typ,
             "count": count,
-            "symbol": (symbol.strip().upper() if symbol else None),
-            "news_topic": news_topic
+            "symbol": (str(symbol).strip().upper() if symbol else None),
+            "news_topic": news_topic,
+            "_provider": result.provider,
         }
 
 
-# OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
-def ask_openai(question, context):
-    # OpenAI chat completion function
-    prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=300
-    )
-    return response.choices[0].message.content.strip()
+# A small local model is likelier than GPT to answer from memory when the context
+# is thin, so the grounding rule is explicit rather than implied by the layout.
+SYNTHESIS_SYSTEM_PROMPT = (
+    "You are a finance news assistant. Base your answer on the supplied context, "
+    "summarising and connecting what it reports. Use only facts present in the context: "
+    "never invent prices, tickers, dates or figures, and never add market knowledge of "
+    "your own. If the context contains nothing relevant to the question, say so plainly."
+)
 
 
-def fetch_newsapi():
-    url = f"https://newsapi.org/v2/everything?q=finance OR stock OR crypto&sortBy=publishedAt&language=en&apiKey={NEWSAPI_KEY}"
-    response = requests.get(url)
+def ask_llm(question, context):
+    """Answer `question` from `context` using the first available provider."""
+    messages = [
+        {"role": "system", "content": SYNTHESIS_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
+    ]
+    result = chat(messages, max_tokens=300)
+    logger.info("Synthesised via %s/%s in %dms", result.provider, result.model, result.latency_ms)
+    return result.text
+
+
+# Kept so existing callers keep working after the provider swap.
+ask_openai = ask_llm
+
+
+class Analysis(str):
+    """The formatted answer, with the numbers behind it attached.
+
+    Subclasses str so every existing caller -- the router, the template, the
+    tests -- keeps treating it as the answer text. `.facts` carries the figures
+    the critic agent reasons over, so the critic never has to re-parse prose or
+    recompute anything.
+    """
+
+    def __new__(cls, text: str, facts: dict):
+        obj = super().__new__(cls, text)
+        obj.facts = facts
+        return obj
+
+
+# Finnhub only accepts this fixed set of news categories.
+FINNHUB_CATEGORIES = {"general", "forex", "crypto", "merger"}
+
+
+def fetch_newsapi(topic="general"):
+    query = topic if topic and topic != "general" else "finance OR stock OR crypto"
+    params = {
+        "q": query,
+        "sortBy": "publishedAt",
+        "language": "en",
+        "apiKey": NEWSAPI_KEY,
+    }
+    response = requests.get("https://newsapi.org/v2/everything", params=params,
+                            timeout=DEFAULT_TIMEOUT)
 
     if response.status_code != 200:
-        raise Exception(f"NewsAPI error {response.status_code}: {response.text}")
+        raise SourceError(f"NewsAPI error {response.status_code}: {response.text[:200]}",
+                          status=response.status_code)
 
     articles = response.json().get("articles", [])[:5]
     return [f"{a['title']} - {a['source']['name']}\n{a['description']}" for a in articles]
-
 
 
 def fetch_reddit_posts(subreddit_name="wallstreetbets", limit=5):
     reddit = praw.Reddit(
         client_id=REDDIT_CLIENT_ID,
         client_secret=REDDIT_CLIENT_SECRET,
-        user_agent=REDDIT_USER_AGENT
+        user_agent=REDDIT_USER_AGENT,
+        timeout=DEFAULT_TIMEOUT[1],
     )
     reddit.read_only = True
     subreddit = reddit.subreddit(subreddit_name)
@@ -188,10 +442,11 @@ def fetch_reddit_posts(subreddit_name="wallstreetbets", limit=5):
 
 def get_finnhub_news(category="general", max_articles=5):
     url = f"https://finnhub.io/api/v1/news?category={category}&token={FINNHUB_API_KEY}"
-    response = requests.get(url)
-    
+    response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+
     if response.status_code != 200:
-        raise Exception(f"Error fetching news: {response.status_code} - {response.text}")
+        raise SourceError(f"Finnhub error {response.status_code}: {response.text[:200]}",
+                          status=response.status_code)
     
     news = response.json()
     
@@ -207,6 +462,43 @@ def get_finnhub_news(category="general", max_articles=5):
     
     return results    
 
+
+
+
+
+def get_finnhub_company_news(symbol, hours=1, max_articles=5):
+    """Company-specific news for one ticker, limited to the last `hours`."""
+    to_date = datetime.now()
+    params = {
+        "symbol": symbol,
+        "from": (to_date - timedelta(days=(hours // 24) + 1)).strftime("%Y-%m-%d"),
+        "to": to_date.strftime("%Y-%m-%d"),
+        "token": FINNHUB_API_KEY,
+    }
+    response = requests.get("https://finnhub.io/api/v1/company-news", params=params,
+                            timeout=DEFAULT_TIMEOUT)
+
+    if response.status_code != 200:
+        raise SourceError(f"Finnhub company-news error {response.status_code}: "
+                          f"{response.text[:200]}", status=response.status_code)
+
+    cutoff = to_date - timedelta(hours=hours)
+    results = []
+    for item in response.json():
+        published = datetime.fromtimestamp(item['datetime'])
+        if published < cutoff:
+            continue
+        results.append({
+            "datetime": published,
+            "headline": item['headline'],
+            "source": item['source'],
+            "summary": item.get('summary', 'No summary available'),
+            "url": item['url']
+        })
+        if len(results) >= max_articles:
+            break
+
+    return results
 
 
 
@@ -229,31 +521,45 @@ def get_stock_trend(symbol):
     today = datetime.now().date()
     yesterday = today - timedelta(days=1)
     last_week = today - timedelta(days=7)
-    
+
     # Download historical data for last 8 days to cover weekends/holidays
     data = yf.download(symbol, start=last_week - timedelta(days=2), end=today + timedelta(days=1), progress=False, threads=False)
-    
+
     if data.empty:
         return f"No data found for {symbol}"
-    
+
+    # yfinance returns MultiIndex columns even for a single ticker; flatten to a 1-D series.
+    close = data['Close']
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+
+    trading_days = close.index.date
+    earliest = trading_days.min()
+
     # Get closing prices, adjust for market holidays/weekends
     def get_closest_close(date):
-        # If market closed, find closest previous day with data
-        while date not in data.index.date:
+        # If market closed, find closest previous day with data. Stop at the start of the
+        # window rather than walking backwards forever across a long closure.
+        while date not in trading_days:
             date -= timedelta(days=1)
-        return float(data.loc[data.index.date == date]['Close'].iloc[0])
-    
+            if date < earliest:
+                return None
+        return float(close[trading_days == date].iloc[0])
+
     close_today = get_closest_close(today)
     close_yesterday = get_closest_close(yesterday)
     close_last_week = get_closest_close(last_week)
-    
+
+    if close_today is None or close_yesterday is None or close_last_week is None:
+        return f"Not enough trading-day data in the last week to assess {symbol}."
+
     # Calculate % changes
     change_today = ((close_today - close_yesterday) / close_yesterday) * 100
     change_week = ((close_today - close_last_week) / close_last_week) * 100
-    
+
     # Determine trend
     trend = "Bullish" if change_week > 0 else "Bearish"
-    
+
     # Simple behavior assessment
     if abs(change_today) < 0.5 and abs(change_week) < 1:
         behavior = "Stable"
@@ -263,7 +569,7 @@ def get_stock_trend(symbol):
         behavior = "Strong Downtrend"
     else:
         behavior = "Moderate Movement"
-    
+
     result = (
         f"Stock: {symbol}\n"
         f"Close Price Today: ${close_today:.2f}\n"
@@ -272,11 +578,8 @@ def get_stock_trend(symbol):
         f"Trend over last week: {trend}\n"
         f"Behavior: {behavior}"
     )
-    
+
     return result
-
-
-
 
 
 def get_top_performing_stocks_helpers(stock_symbols, top_n=5, period="1y"):
@@ -381,7 +684,23 @@ def analyze_portfolio(tickers: list, weights: list) -> str:
 
     # Download historical data
     data = yf.download(tickers, start=start_date, end=end_date, progress=False, threads=False)['Close']
-    data = data.dropna()
+    if isinstance(data, pd.Series):
+        data = data.to_frame(tickers[0])
+
+    # Drop tickers that returned nothing before dropping incomplete rows. Otherwise one
+    # bad symbol is an all-NaN column, every row is dropped, and the metrics below are
+    # computed on an empty frame.
+    data = data.dropna(axis=1, how='all').dropna()
+
+    if data.empty:
+        return f"No overlapping historical data for: {', '.join(tickers)}"
+
+    # Say so rather than silently renormalising: the weights were validated to sum to
+    # 1.0, and dropping a holding quietly breaks that promise.
+    missing = [t for t in tickers if t not in data.columns]
+    if missing:
+        return (f"No historical data for: {', '.join(missing)}. "
+                f"Correct or remove those symbols so the weights still sum to 100%.")
 
     # Calculate daily returns
     returns = np.log(data / data.shift(1)).dropna()
@@ -423,8 +742,63 @@ def analyze_portfolio(tickers: list, weights: list) -> str:
     asset_metrics_str = asset_metrics.to_string(float_format='{:,.2%}'.format)
     output.append(asset_metrics_str)
 
-    return "\n".join(output)
+    facts = {
+        "kind": "rank_portfolio",
+        "weights": {t: float(aligned_weights[t]) for t in data.columns},
+        "expected_annual_return": float(portfolio_return),
+        "volatility": float(portfolio_std_dev),
+        "sharpe": float(sharpe_ratio),
+        "risk_free_rate": float(risk_free_rate),
+        "per_asset_return": {t: float(expected_annual_returns[t]) for t in data.columns},
+    }
+    return Analysis("\n".join(output), facts)
 
+
+def evaluate_stock_standalone(ticker: str) -> str:
+    """Assess one stock on its own, for a user who stated no holdings.
+
+    should_buy_stock answers "does this improve what I already have", which has
+    no meaning without a portfolio. Rather than erroring, say what can be said
+    about the stock by itself and ask for holdings to go further.
+    """
+    end_date = datetime.today().strftime("%Y-%m-%d")
+    start_date = (datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    data = yf.download(ticker, start=start_date, end=end_date, progress=False, threads=False)['Close']
+    if isinstance(data, pd.DataFrame):
+        data = data.iloc[:, 0]
+    data = data.dropna()
+
+    if data.empty:
+        return f"No historical data available for {ticker}."
+
+    returns = np.log(data / data.shift(1)).dropna()
+    annual_return = float(returns.mean() * 252)
+    volatility = float(returns.std() * np.sqrt(252))
+    risk_free_rate = float(yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100)
+    sharpe = (annual_return - risk_free_rate) / volatility if volatility else float('nan')
+
+    output = [
+        f"=== {ticker} on its own ===",
+        f"Expected Annual Return: {annual_return:.2%}",
+        f"Volatility (Std Dev): {volatility:.2%}",
+        f"Sharpe Ratio: {sharpe:.2f}",
+        f"Risk-Free Rate (10Y Treasury): {risk_free_rate:.2%}",
+        "",
+        "These are the stock's own figures over the last year. Whether buying it "
+        "is a good idea depends on what you already hold -- tell me your current "
+        'positions (for example "I hold IVV 60%, KO 40%") and I can work out '
+        "whether it improves the mix.",
+    ]
+    facts = {
+        "kind": "stock_standalone",
+        "ticker": ticker,
+        "annual_return": annual_return,
+        "volatility": volatility,
+        "sharpe": sharpe,
+        "risk_free_rate": risk_free_rate,
+    }
+    return Analysis("\n".join(output), facts)
 
 
 def should_buy_stock(tickers: list, weights: list, new_stock: str) -> str:
@@ -433,6 +807,9 @@ def should_buy_stock(tickers: list, weights: list, new_stock: str) -> str:
         raise ValueError("Length of tickers and weights must match.")
     if not np.isclose(sum(weights), 1.0):
         raise ValueError("Weights must sum to 1.0")
+    if new_stock in tickers:
+        return (f"{new_stock} is already in your portfolio at "
+                f"{weights[tickers.index(new_stock)]:.1%}.")
 
     # Dates
     end_date = datetime.today().strftime("%Y-%m-%d")
@@ -440,10 +817,19 @@ def should_buy_stock(tickers: list, weights: list, new_stock: str) -> str:
 
     # Fetch data for current portfolio and new stock
     all_tickers = tickers + [new_stock]
-    data = yf.download(all_tickers, start=start_date, end=end_date, progress=False, threads=False)['Close'].dropna()
+    data = yf.download(all_tickers, start=start_date, end=end_date, progress=False, threads=False)['Close']
+    data = data.dropna(axis=1, how='all').dropna()
 
     if data.empty:
         return f"No historical data available for one or more tickers: {all_tickers}"
+
+    missing = [t for t in all_tickers if t not in data.columns]
+    if missing:
+        return f"No historical data available for: {', '.join(missing)}"
+
+    # yfinance returns 'Close' columns sorted alphabetically, not in the order they were
+    # requested. Without this reindex the weight vectors below land on the wrong stocks.
+    data = data[all_tickers]
 
     # Daily returns
     returns = np.log(data / data.shift(1)).dropna()
@@ -453,50 +839,50 @@ def should_buy_stock(tickers: list, weights: list, new_stock: str) -> str:
     # Risk-free rate
     risk_free_rate = yf.Ticker("^TNX").history(period="1d")['Close'].iloc[-1] / 100
 
-    # Helper: portfolio performance
-    def portfolio_performance(w):
-        w = np.array(w)  # Ensure numpy array
-        port_return = np.dot(w, mean_returns)
-        port_vol = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
+    # Helper: portfolio performance for a weight vector over the columns `cols`,
+    # selected by name so weights can never drift onto the wrong ticker.
+    def portfolio_performance(w, cols):
+        w = np.array(w)
+        port_return = np.dot(w, mean_returns.loc[cols])
+        port_vol = np.sqrt(np.dot(w.T, np.dot(cov_matrix.loc[cols, cols], w)))
         sharpe = (port_return - risk_free_rate) / port_vol
         return port_return, port_vol, sharpe
 
-    # Helper: negative Sharpe for minimization
-    def neg_sharpe(w):
-        return -portfolio_performance(w)[2]
+    # Helper: max achievable Sharpe using only `cols`, long-only and fully invested
+    def best_sharpe(cols):
+        n = len(cols)
+        result = minimize(
+            lambda w: -portfolio_performance(w, cols)[2],
+            np.ones(n) / n,
+            method='SLSQP',
+            bounds=tuple((0, 1) for _ in range(n)),
+            constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+        )
+        return result.x, portfolio_performance(result.x, cols)[2]
 
-    # Constraints & bounds
-    constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
-    bounds = tuple((0, 1) for _ in all_tickers)
+    # What the user holds today, at their own weights
+    curr_sharpe = portfolio_performance(weights, tickers)[2]
 
-    # Optimize weights for max Sharpe (WITH new stock)
-    result_new = minimize(
-        neg_sharpe,
-        np.ones(len(all_tickers)) / len(all_tickers),
-        method='SLSQP',
-        bounds=bounds,
-        constraints=constraints
-    )
-    new_weights = result_new.x
+    # Compare like with like: best achievable WITHOUT the new stock against best
+    # achievable WITH it. Measuring the user's own weights against an optimised
+    # portfolio would credit the new stock for gains that come purely from
+    # re-weighting the holdings they already have.
+    _, best_without = best_sharpe(tickers)
+    new_weights, best_with = best_sharpe(all_tickers)
 
-    # Current portfolio performance (WITHOUT new stock)
-    curr_weights_padded = np.array(weights + [0])  # pad with zero weight for the new stock
-    curr_return, curr_vol, curr_sharpe = portfolio_performance(curr_weights_padded)
-
-    # New portfolio performance (WITH new stock optimized)
-    new_return, new_vol, new_sharpe = portfolio_performance(new_weights)
-
-    # Decide if buy is good
-    decision = "BUY ✅" if new_sharpe > curr_sharpe else "DON'T BUY ❌"
+    decision = "BUY" if best_with > best_without + 1e-6 else "DON'T BUY"
 
     # Format output
     output = []
     output.append(f"=== Should You Buy {new_stock}? ===")
-    output.append(f"Current Sharpe Ratio: {curr_sharpe:.2f}")
-    output.append(f"New Sharpe Ratio (with optimization): {new_sharpe:.2f}")
+    output.append(f"Your portfolio today, at your weights: {curr_sharpe:.2f}")
+    output.append(f"Best achievable Sharpe without {new_stock}: {best_without:.2f}")
+    output.append(f"Best achievable Sharpe with {new_stock}: {best_with:.2f}")
+    output.append(f"Marginal gain from adding {new_stock}: {best_with - best_without:+.3f}")
     output.append(f"Decision: {decision}\n")
 
-    if decision.startswith("BUY"):
+    suggested = {t: float(w) for t, w in zip(all_tickers, new_weights)}
+    if decision == "BUY":
         new_alloc_df = pd.DataFrame({
             'Ticker': all_tickers,
             'Weight': new_weights
@@ -504,7 +890,15 @@ def should_buy_stock(tickers: list, weights: list, new_stock: str) -> str:
         output.append("Suggested New Weights:")
         output.append(new_alloc_df.to_string(index=False, float_format="{:.2%}".format))
 
-    return "\n".join(output)
-
-
-
+    facts = {
+        "kind": "should_buy_stock",
+        "new_stock": new_stock,
+        "current_weights": dict(zip(tickers, weights)),
+        "current_sharpe": float(curr_sharpe),
+        "best_without": float(best_without),
+        "best_with": float(best_with),
+        "marginal_gain": float(best_with - best_without),
+        "decision": decision,
+        "suggested_weights": suggested if decision == "BUY" else None,
+    }
+    return Analysis("\n".join(output), facts)

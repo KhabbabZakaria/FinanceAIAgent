@@ -3,10 +3,10 @@ requests
 praw
 python-dotenv
 Flask
+flask-limiter
 yfinance
 APScheduler==3.10.4
 yagmail
 scipy
-langchain
-langchain-openai
-langchain-core
+pandas
+numpy

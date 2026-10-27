@@ -3,3 +3,6 @@ test.txt
 test.py
 portfolios.db
 __pycache__
+app-error.log
+.DS_Store
+.pytest_cache/
