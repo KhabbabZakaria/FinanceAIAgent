@@ -61,14 +61,16 @@ Neither agent is wrong; a user reading only the first one would be misled.
           │
           ▼
   ┌──────────────────────────────────────────────┐
-  │ QuestionClassifier    small LLM, JSON mode    │   LLM #1
-  │ → intent + tickers + weights + topic          │
+  │ QuestionClassifier                 LLM #1    │
+  │   JSON mode, temperature 0                   │
+  │   -> intent + tickers + weights + topic      │
   └───────────────────────┬──────────────────────┘
                           ▼
   ┌──────────────────────────────────────────────┐
-  │ Router          deterministic if/elif         │   no LLM
-  │ dispatches only on known intents; one the     │
-  │ model invents falls through, never executes   │
+  │ Router                             no LLM    │
+  │   deterministic if/elif; dispatches only     │
+  │   on known intents, so one the model         │
+  │   invents falls through and never runs       │
   └──┬─────────────────────────────────┬─────────┘
      ▼                                 ▼
   ┌───────────────────────────┐   ┌───────────────────────────────┐
@@ -83,17 +85,24 @@ Neither agent is wrong; a user reading only the first one would be misled.
   └────────────┬──────────────┘   └───────────────────────────────┘
                ▼
   ┌──────────────────────────────────────────────┐
-  │ AGENT B    critic                             │
-  │  checks()    pure Python rules vs profile.py  │   no LLM
-  │              → exact, testable findings       │
-  │  critique()  which matter, and why     LLM #3 │
-  │  never recomputes; degrades to the rules      │
+  │ AGENT B    critic                            │
+  │                                              │
+  │  checks()    no LLM - pure Python rules      │
+  │              against profile.py, giving      │
+  │              exact, testable findings        │
+  │                                              │
+  │  critique()  LLM #3 - reads those findings,  │
+  │              decides which matter, writes    │
+  │              them up. Never recomputes.      │
+  │                                              │
+  │  no model available -> raw findings instead  │
   └───────────────────────┬──────────────────────┘
                           ▼
              answer + "Worth knowing"
 ```
 
-Three LLM calls, and none of them produce a number. Six intents —
+Three LLM calls — classification, news synthesis, and the critic's write-up —
+and none of them produce a number. Six intents —
 `rank_portfolio`, `should_buy_stock`, `top_performers`, `stock_trend`,
 `get_finance_news`, and `other`, which returns a capability list rather than a
 blank page.
